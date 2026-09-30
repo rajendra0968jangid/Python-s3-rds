@@ -1,15 +1,21 @@
-from flask import Flask, render_template, request, redirect, session, url_for
+from flask import Flask, render_template, request, redirect, session
 from flask_mysqldb import MySQL
 import boto3
 from config import Config
 import uuid
 
+
 app = Flask(__name__)
+
+# Load configuration
 app.config.from_object(Config)
 
+# MySQL
 mysql = MySQL(app)
 
-# S3 Client
+
+# ===================== S3 CLIENT =====================
+
 s3 = boto3.client(
     "s3",
     aws_access_key_id=app.config["AWS_ACCESS_KEY_ID"],
@@ -17,31 +23,51 @@ s3 = boto3.client(
     region_name=app.config["AWS_REGION"]
 )
 
+
 # ===================== SIGNUP =====================
+
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
+
     if request.method == "POST":
+
         name = request.form["name"]
         email = request.form["email"]
         password = request.form["password"]
-        file = request.files["avatar"]
 
-        filename = str(uuid.uuid4()) + file.filename
+        file = request.files.get("avatar")
 
+        if not file:
+            return "Avatar is required"
+
+        # Generate unique filename
+        filename = str(uuid.uuid4()) + "_" + file.filename
+
+        # Upload to S3
         s3.upload_fileobj(
-                file,
-                app.config["AWS_BUCKET_NAME"],
-                filename
+            file,
+            app.config["AWS_BUCKET_NAME"],
+            filename
         )
 
+        # S3 URL
+        avatar_url = (
+            f"https://{app.config['AWS_BUCKET_NAME']}.s3."
+            f"{app.config['AWS_REGION']}.amazonaws.com/{filename}"
+        )
 
-        avatar_url = f"https://{app.config['AWS_BUCKET_NAME']}.s3.amazonaws.com/{filename}"
-
+        # Save user in MySQL
         cur = mysql.connection.cursor()
+
         cur.execute(
-            "INSERT INTO users(name,email,password,avatar_url) VALUES(%s,%s,%s,%s)",
+            """
+            INSERT INTO users
+            (name, email, password, avatar_url)
+            VALUES (%s, %s, %s, %s)
+            """,
             (name, email, password, avatar_url)
         )
+
         mysql.connection.commit()
         cur.close()
 
@@ -51,24 +77,36 @@ def signup():
 
 
 # ===================== SIGNIN =====================
+
 @app.route("/signin", methods=["GET", "POST"])
 def signin():
+
     if request.method == "POST":
+
         email = request.form["email"]
         password = request.form["password"]
 
         cur = mysql.connection.cursor()
+
         cur.execute(
-            "SELECT * FROM users WHERE email=%s AND password=%s",
+            """
+            SELECT *
+            FROM users
+            WHERE email=%s AND password=%s
+            """,
             (email, password)
         )
+
         user = cur.fetchone()
+
         cur.close()
 
         if user:
+
             session["user_id"] = user[0]
             session["name"] = user[1]
             session["avatar"] = user[4]
+
             return redirect("/home")
 
         return "Invalid Credentials"
@@ -77,8 +115,10 @@ def signin():
 
 
 # ===================== HOME =====================
+
 @app.route("/home")
 def home():
+
     if "user_id" not in session:
         return redirect("/signin")
 
@@ -90,11 +130,21 @@ def home():
 
 
 # ===================== LOGOUT =====================
+
 @app.route("/logout")
 def logout():
+
     session.clear()
+
     return redirect("/signin")
 
 
+# ===================== RUN =====================
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0",port=5000,debug=True)
+
+    app.run(
+        host="0.0.0.0",
+        port=app.config["PORT"],
+        debug=True
+    )
