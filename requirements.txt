@@ -2,6 +2,7 @@ Flask
 flask-mysqldb
 boto3
 python-dotenv
+dotenv
 
 # CREATE DATABASE flask_auth;
 

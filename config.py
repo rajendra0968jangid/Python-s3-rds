@@ -1,15 +1,20 @@
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
+
+c
 class Config:
     SECRET_KEY = "your_secret_key"
 
-    MYSQL_HOST = "localhost"
-    MYSQL_USER = "root"
-    MYSQL_PASSWORD = "your_mysql_password"
-    MYSQL_DB = "flask_auth"
+    # MySQL
+    MYSQL_HOST = os.getenv("MYSQL_HOST")
+    MYSQL_USER = os.getenv("MYSQL_USER")
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
+    MYSQL_DB = os.getenv("MYSQL_DB")
 
     # AWS S3
-    AWS_ACCESS_KEY_ID = "your_access_key"
-    AWS_SECRET_ACCESS_KEY = "your_secret_key"
-    AWS_BUCKET_NAME = "your_bucket_name"
-    AWS_REGION = "ap-south-1"
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+    AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
+    AWS_REGION = os.getenv("AWS_REGION")
