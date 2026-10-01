@@ -1,107 +1,259 @@
 from flask import Flask, render_template, request, redirect, session
-from flask_mysqldb import MySQL
+import pymysql
 import boto3
-from config import Config
 import uuid
+import os
 
+from dotenv import load_dotenv
+
+
+# =====================================================
+# LOAD .ENV
+# =====================================================
+
+load_dotenv()
+
+
+# =====================================================
+# FLASK APP
+# =====================================================
 
 app = Flask(__name__)
 
-# Load configuration
-app.config.from_object(Config)
-
-# MySQL
-mysql = MySQL(app)
+app.secret_key = os.getenv("SECRET_KEY")
 
 
-# ===================== S3 CLIENT =====================
+# =====================================================
+# ENVIRONMENT VARIABLES
+# =====================================================
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
+MYSQL_DB = os.getenv("MYSQL_DB")
+
+
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+
+# =====================================================
+# MYSQL CONNECTION FUNCTION
+# =====================================================
+
+def get_db_connection():
+
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DB,
+        cursorclass=pymysql.cursors.Cursor,
+        autocommit=False
+    )
+
+
+# =====================================================
+# S3 CLIENT
+# =====================================================
 
 s3 = boto3.client(
     "s3",
-    aws_access_key_id=app.config["AWS_ACCESS_KEY_ID"],
-    aws_secret_access_key=app.config["AWS_SECRET_ACCESS_KEY"],
-    region_name=app.config["AWS_REGION"]
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_REGION
 )
 
 
-# ===================== SIGNUP =====================
+# =====================================================
+# TEST ROUTE
+# =====================================================
+
+@app.route("/")
+def index():
+
+    return redirect("/signin")
+
+
+# =====================================================
+# SIGNUP
+# =====================================================
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
 
     if request.method == "POST":
 
-        name = request.form["name"]
-        email = request.form["email"]
-        password = request.form["password"]
+        name = request.form.get("name")
+        email = request.form.get("email")
+        password = request.form.get("password")
 
         file = request.files.get("avatar")
 
-        if not file:
+
+        # Validate fields
+
+        if not name or not email or not password:
+            return "Name, email and password are required"
+
+
+        # Validate avatar
+
+        if not file or file.filename == "":
             return "Avatar is required"
 
-        # Generate unique filename
-        filename = str(uuid.uuid4()) + "_" + file.filename
 
-        # Upload to S3
-        s3.upload_fileobj(
-            file,
-            app.config["AWS_BUCKET_NAME"],
-            filename
-        )
+        # =================================================
+        # GENERATE UNIQUE FILE NAME
+        # =================================================
 
+        filename = f"{uuid.uuid4()}_{file.filename}"
+
+
+        # =================================================
+        # UPLOAD TO S3
+        # =================================================
+
+        try:
+
+            s3.upload_fileobj(
+                file,
+                AWS_BUCKET_NAME,
+                filename
+            )
+
+        except Exception as e:
+
+            return f"S3 Upload Error: {str(e)}"
+
+
+        # =================================================
         # S3 URL
+        # =================================================
+
         avatar_url = (
-            f"https://{app.config['AWS_BUCKET_NAME']}.s3."
-            f"{app.config['AWS_REGION']}.amazonaws.com/{filename}"
+            f"https://{AWS_BUCKET_NAME}.s3."
+            f"{AWS_REGION}.amazonaws.com/{filename}"
         )
 
-        # Save user in MySQL
-        cur = mysql.connection.cursor()
 
-        cur.execute(
-            """
-            INSERT INTO users
-            (name, email, password, avatar_url)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (name, email, password, avatar_url)
-        )
+        # =================================================
+        # SAVE USER TO MYSQL
+        # =================================================
 
-        mysql.connection.commit()
-        cur.close()
+        connection = None
+        cursor = None
+
+        try:
+
+            connection = get_db_connection()
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO users
+                (name, email, password, avatar_url)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    name,
+                    email,
+                    password,
+                    avatar_url
+                )
+            )
+
+            connection.commit()
+
+        except pymysql.err.IntegrityError:
+
+            if connection:
+                connection.rollback()
+
+            return "Email already exists"
+
+        except Exception as e:
+
+            if connection:
+                connection.rollback()
+
+            return f"MySQL Error: {str(e)}"
+
+        finally:
+
+            if cursor:
+                cursor.close()
+
+            if connection:
+                connection.close()
+
 
         return redirect("/signin")
+
 
     return render_template("signup.html")
 
 
-# ===================== SIGNIN =====================
+# =====================================================
+# SIGNIN
+# =====================================================
 
 @app.route("/signin", methods=["GET", "POST"])
 def signin():
 
     if request.method == "POST":
 
-        email = request.form["email"]
-        password = request.form["password"]
+        email = request.form.get("email")
+        password = request.form.get("password")
 
-        cur = mysql.connection.cursor()
 
-        cur.execute(
-            """
-            SELECT *
-            FROM users
-            WHERE email=%s AND password=%s
-            """,
-            (email, password)
-        )
+        # =================================================
+        # GET USER FROM MYSQL
+        # =================================================
 
-        user = cur.fetchone()
+        connection = None
+        cursor = None
 
-        cur.close()
+        try:
 
-        if user:
+            connection = get_db_connection()
+
+            cursor = connection.cursor()
+
+            cursor.execute(
+                """
+                SELECT id, name, email, password, avatar_url
+                FROM users
+                WHERE email = %s
+                """,
+                (email,)
+            )
+
+            user = cursor.fetchone()
+
+        except Exception as e:
+
+            return f"MySQL Error: {str(e)}"
+
+        finally:
+
+            if cursor:
+                cursor.close()
+
+            if connection:
+                connection.close()
+
+
+        # =================================================
+        # CHECK PASSWORD
+        # =================================================
+
+        if user and user[3] == password:
 
             session["user_id"] = user[0]
             session["name"] = user[1]
@@ -109,18 +261,24 @@ def signin():
 
             return redirect("/home")
 
+
         return "Invalid Credentials"
+
 
     return render_template("signin.html")
 
 
-# ===================== HOME =====================
+# =====================================================
+# HOME
+# =====================================================
 
 @app.route("/home")
 def home():
 
     if "user_id" not in session:
+
         return redirect("/signin")
+
 
     return render_template(
         "home.html",
@@ -129,7 +287,9 @@ def home():
     )
 
 
-# ===================== LOGOUT =====================
+# =====================================================
+# LOGOUT
+# =====================================================
 
 @app.route("/logout")
 def logout():
@@ -139,12 +299,17 @@ def logout():
     return redirect("/signin")
 
 
-# ===================== RUN =====================
+# =====================================================
+# RUN APPLICATION
+# =====================================================
 
 if __name__ == "__main__":
 
+    port = int(os.getenv("PORT", "5000"))
+
     app.run(
         host="0.0.0.0",
-        port=app.config["PORT"],
+        port=port,
         debug=True
     )
+
