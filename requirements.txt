@@ -1,5 +1,4 @@
 Flask
-flask-mysqldb
+PyMySQL
 boto3
 python-dotenv
-dotenv
